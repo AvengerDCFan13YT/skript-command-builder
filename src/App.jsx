@@ -1,18 +1,5 @@
-import React, { useMemo, useState } from "react";
-import { motion } from "framer-motion";
-import { Copy, Download, Plus, Trash2, Wand2, Info } from "lucide-react";
+import React, { useMemo, useState, useEffect } from "react";
 
-// shadcn/ui primitives (assumed available)
-import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Input } from "@/components/ui/input";
-import { Textarea } from "@/components/ui/textarea";
-import { Label } from "@/components/ui/label";
-import { Switch } from "@/components/ui/switch";
-import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from "@/components/ui/select";
-import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
-
-// --- Types ---
 const ARG_TYPES = [
   { id: "string", label: "string" },
   { id: "number", label: "number" },
@@ -24,318 +11,157 @@ const ARG_TYPES = [
   { id: "boolean", label: "boolean" },
 ];
 
+const SCB_CSS = `
+:root {
+  --bg:#f0f2f5;
+  --card:#ffffff;
+  --text:#1f2937;
+  --muted:#6b7280;
+  --primary:#3b82f6;
+  --accent:#6366f1;
+}
+* { box-sizing: border-box; }
+html, body, #root { height: 100%; margin:0; font-family: 'Inter', sans-serif; background: var(--bg); color: var(--text); }
+.app { min-height: 100vh; padding: 32px; display: flex; justify-content: center; align-items: flex-start; }
+.container { max-width: 1024px; width:100%; display: grid; grid-template-columns: 1fr 1fr; gap: 24px; }
+.card { background: var(--card); border-radius: 16px; padding:24px; box-shadow: 0 8px 16px rgba(0,0,0,0.1); }
+.input, .select, .textarea { width:100%; padding:10px; border:1px solid #d1d5db; border-radius: 12px; font-size:14px; }
+.textarea { min-height: 80px; resize: vertical; }
+.btn { padding: 8px 16px; margin:4px 2px; cursor:pointer; border-radius:12px; border:none; font-weight:500; transition: all 0.2s; }
+.btn.primary { background: var(--primary); color:#fff; }
+.btn.primary:hover { background: var(--accent); }
+.btn.secondary { background:#e5e7eb; color:#111827; }
+.label { font-size: 13px; margin-top: 8px; margin-bottom:4px; display:block; font-weight:500; }
+.code { background:#111827; color:#f3f4f6; padding:16px; border-radius:12px; font-family: 'Fira Code', monospace; overflow-x:auto; max-height: 400px; }
+.checkbox { margin-right:6px; }
+h1 { grid-column: span 2; font-size: 24px; margin-bottom: 16px; }
+h3 { margin-bottom:8px; font-size:18px; }
+`;
+
+function useInjectStyles(cssText) {
+  useEffect(() => {
+    const style = document.createElement('style');
+    style.textContent = cssText;
+    document.head.appendChild(style);
+  }, [cssText]);
+}
+
 function sanitizeName(name) {
-  const trimmed = name.trim();
-  if (!trimmed) return "";
-  // Remove leading slash if present; Skript will add in usage if needed
-  return trimmed.replace(/^\//, "");
+  return name.trim().replace(/^\//, '');
 }
 
 function buildUsage(name, args) {
   const head = `/${sanitizeName(name)}`;
-  const parts = args.map(a => {
-    const token = a.name.trim() || a.type || "arg";
-    const t = `<${token}>`;
-    return a.optional ? `[${t.slice(1, -1)}]` : t;
-  });
-  return [head, ...parts].join(" ");
+  const parts = args.map(a => a.optional ? `[<${a.name || a.type}>]` : `<${a.name || a.type}>`);
+  return [head, ...parts].join(' ');
 }
 
 function buildCommandLine(name, args) {
   const head = `command /${sanitizeName(name)}`;
-  const parts = args.map(a => {
-    const token = a.name.trim() || a.type || "arg";
-    return a.optional ? `[<${token}>]` : `<${token}>`;
-  });
-  return parts.length ? `${head} ${parts.join(" ")}:` : `${head}:`;
-}
-
-function buildAliases(aliasesRaw) {
-  const list = aliasesRaw
-    .split(",")
-    .map(a => a.trim())
-    .filter(Boolean)
-    .map(a => (a.startsWith("/") ? a : `/${a}`));
-  return list.join(", ");
-}
-
-function line(k, v) {
-  return v ? `    ${k}: ${v}` : "";
+  const parts = args.map(a => a.optional ? `[<${a.name || a.type}>]` : `<${a.name || a.type}>`);
+  return parts.length ? `${head} ${parts.join(' ')}:` : `${head}:`;
 }
 
 export default function SkriptCommandTemplateBuilder() {
+  useInjectStyles(SCB_CSS);
+
   const [name, setName] = useState("");
   const [aliases, setAliases] = useState("");
   const [description, setDescription] = useState("");
-  const [usage, setUsage] = useState("");
   const [permission, setPermission] = useState("");
   const [permissionMessage, setPermissionMessage] = useState("");
   const [cooldownEnabled, setCooldownEnabled] = useState(false);
-  const [cooldownValue, setCooldownValue] = useState("10 seconds");
+  const [cooldownValue, setCooldownValue] = useState("");
   const [cooldownMessage, setCooldownMessage] = useState("");
   const [cooldownBypass, setCooldownBypass] = useState("");
   const [executableBy, setExecutableBy] = useState("both");
   const [autoUsage, setAutoUsage] = useState(true);
-  const [args, setArgs] = useState([
-    { name: "", type: "string", optional: false, greedy: false },
-  ]);
+  const [args, setArgs] = useState([{ name: "", type: "string", optional: false }]);
 
-  const usageComputed = useMemo(() => {
-    return autoUsage ? buildUsage(name, args) : usage;
-  }, [autoUsage, name, args, usage]);
+  const usageComputed = useMemo(() => autoUsage ? buildUsage(name, args) : "", [autoUsage, name, args]);
 
   const commandBlock = useMemo(() => {
-    const _aliases = buildAliases(aliases);
     const lines = [];
-    // command header
     lines.push(buildCommandLine(name, args));
-
-    if (_aliases) lines.push(line("aliases", _aliases));
-    if (description.trim()) lines.push(line("description", description.trim()));
-    if (usageComputed.trim()) lines.push(line("usage", usageComputed.trim()));
-    if (permission.trim()) lines.push(line("permission", permission.trim()));
-    if (permissionMessage.trim())
-      lines.push(line("permission message", permissionMessage.trim()));
-
-    // executable by
-    if (executableBy !== "both") {
-      lines.push(line("executable by", executableBy === "players" ? "players" : "console"));
+    if (aliases) lines.push(`aliases: ${aliases}`);
+    if (description) lines.push(`description: ${description}`);
+    if (usageComputed) lines.push(`usage: ${usageComputed}`);
+    if (permission) lines.push(`permission: ${permission}`);
+    if (permissionMessage) lines.push(`permission message: ${permissionMessage}`);
+    if (executableBy !== "both") lines.push(`executable by: ${executableBy}`);
+    if (cooldownEnabled && cooldownValue) {
+      lines.push(`cooldown: ${cooldownValue}`);
+      if (cooldownMessage) lines.push(`cooldown message: ${cooldownMessage}`);
+      if (cooldownBypass) lines.push(`cooldown bypass: ${cooldownBypass}`);
     }
+    args.forEach((a,i)=>{
+      const nm = a.name || a.type || `arg${i+1}`;
+      lines.push(`# <${nm}> -> ${a.type}${a.optional?' (optional)':''}`);
+    });
+    lines.push('trigger:');
+    return lines.join('\n');
+  }, [name, aliases, description, usageComputed, permission, permissionMessage, executableBy, cooldownEnabled, cooldownValue, cooldownMessage, cooldownBypass, args]);
 
-    // cooldowns
-    if (cooldownEnabled && cooldownValue.trim()) {
-      lines.push(line("cooldown", cooldownValue.trim()));
-      if (cooldownMessage.trim()) lines.push(line("cooldown message", cooldownMessage.trim()));
-      if (cooldownBypass.trim()) lines.push(line("cooldown bypass", cooldownBypass.trim()));
-    }
-
-    // argument parsing hints (comments)
-    if (args.length) {
-      const argHints = args
-        .map((a, i) => {
-          const nm = a.name.trim() || a.type || `arg${i + 1}`;
-          const base = `${nm}: ${a.type}`;
-          const extras = [a.optional ? "optional" : null, a.greedy ? "greedy" : null]
-            .filter(Boolean)
-            .join(", ");
-          return `# <${nm}> -> ${base}${extras ? ` (${extras})` : ""}`;
-        })
-        .join("\n");
-      if (argHints) lines.push(argHints);
-    }
-
-    return lines.join("\n");
-  }, [name, args, aliases, description, usageComputed, permission, permissionMessage, executableBy, cooldownEnabled, cooldownValue, cooldownMessage, cooldownBypass]);
-
-  const canCopy = commandBlock.trim().length > 0 && name.trim().length > 0;
-
-  const addArg = () => setArgs(prev => [...prev, { name: "", type: "string", optional: false, greedy: false }]);
-  const removeArg = (idx) => setArgs(prev => prev.filter((_, i) => i !== idx));
-  const updateArg = (idx, patch) => setArgs(prev => prev.map((a, i) => (i === idx ? { ...a, ...patch } : a)));
-
-  const copyToClipboard = async () => {
-    if (!canCopy) return;
-    await navigator.clipboard.writeText(commandBlock);
-  };
-
-  const downloadFile = () => {
-    const blob = new Blob([commandBlock + "\n"], { type: "text/plain;charset=utf-8" });
-    const a = document.createElement("a");
-    a.href = URL.createObjectURL(blob);
-    a.download = `${sanitizeName(name) || "command"}.sk`; // Skript file
-    a.click();
-    URL.revokeObjectURL(a.href);
-  };
-
-  const autofillDemo = () => {
-    setName("heal");
-    setAliases("h, restore");
-    setDescription("Heals a target player by a specified amount.");
-    setPermission("myplugin.heal");
-    setPermissionMessage("§cYou lack §emyplugin.heal§c.");
-    setCooldownEnabled(true);
-    setCooldownValue("5 seconds");
-    setCooldownMessage("§7Cooldown: §e%cooldown% remaining.");
-    setCooldownBypass("myplugin.bypass.cooldown");
-    setExecutableBy("players");
-    setAutoUsage(true);
-    setArgs([
-      { name: "target", type: "player", optional: true, greedy: false },
-      { name: "amount", type: "number", optional: true, greedy: false },
-    ]);
-  };
+  const addArg = () => setArgs(prev => [...prev, { name: "", type: "string", optional:false }]);
+  const removeArg = idx => setArgs(prev => prev.filter((_, i) => i !== idx));
+  const updateArg = (idx, patch) => setArgs(prev => prev.map((a,i)=>i===idx?{...a,...patch}:a));
 
   return (
-    <TooltipProvider>
-      <div className="min-h-screen w-full bg-gradient-to-b from-slate-50 to-white p-6">
-        <div className="mx-auto max-w-6xl grid grid-cols-1 lg:grid-cols-2 gap-6">
-          <motion.header
-            initial={{ opacity: 0, y: -8 }}
-            animate={{ opacity: 1, y: 0 }}
-            className="lg:col-span-2 flex items-center justify-between"
-          >
-            <div>
-              <h1 className="text-3xl font-bold tracking-tight">Skript Command Template Builder</h1>
-              <p className="text-slate-600">Design everything <span className="font-semibold">before the <code>trigger:</code></span>—clean, copyable, and ready.</p>
+    <div className="app">
+      <div className="container">
+        <h1>Skript Command Template Builder</h1>
+
+        <div className="card">
+          <label className="label">Command name</label>
+          <input className="input" value={name} onChange={e=>setName(e.target.value)} placeholder="Command name" />
+
+          <label className="label">Aliases (comma-separated)</label>
+          <input className="input" value={aliases} onChange={e=>setAliases(e.target.value)} placeholder="h, restore" />
+
+          <label className="label">Description</label>
+          <textarea className="textarea" value={description} onChange={e=>setDescription(e.target.value)} placeholder="Command description" />
+
+          <label className="label">Permission</label>
+          <input className="input" value={permission} onChange={e=>setPermission(e.target.value)} placeholder="myplugin.permission" />
+
+          <label className="label">Permission message</label>
+          <input className="input" value={permissionMessage} onChange={e=>setPermissionMessage(e.target.value)} placeholder="§cNo permission" />
+
+          <label className="label">Executable by</label>
+          <select className="select" value={executableBy} onChange={e=>setExecutableBy(e.target.value)}>
+            <option value="both">Players & Console</option>
+            <option value="players">Players</option>
+            <option value="console">Console</option>
+          </select>
+
+          <label className="label"><input type="checkbox" className="checkbox" checked={cooldownEnabled} onChange={e=>setCooldownEnabled(e.target.checked)} /> Enable cooldown</label>
+          {cooldownEnabled && <>
+            <input className="input" value={cooldownValue} onChange={e=>setCooldownValue(e.target.value)} placeholder="10 seconds" />
+            <input className="input" value={cooldownMessage} onChange={e=>setCooldownMessage(e.target.value)} placeholder="Cooldown message" />
+            <input className="input" value={cooldownBypass} onChange={e=>setCooldownBypass(e.target.value)} placeholder="Cooldown bypass permission" />
+          </>}
+        </div>
+
+        <div className="card">
+          <h3>Arguments</h3>
+          {args.map((arg, idx) => (
+            <div key={idx} style={{display:'flex', gap:8, marginTop:8}}>
+              <input className="input" placeholder="name" value={arg.name} onChange={e=>updateArg(idx,{name:e.target.value})} />
+              <select className="select" value={arg.type} onChange={e=>updateArg(idx,{type:e.target.value})}>
+                {ARG_TYPES.map(t=><option key={t.id} value={t.id}>{t.label}</option>)}
+              </select>
+              <label><input type="checkbox" className="checkbox" checked={arg.optional} onChange={e=>updateArg(idx,{optional:e.target.checked})} /> optional</label>
+              <button className="btn secondary" onClick={()=>removeArg(idx)}>✖</button>
             </div>
-            <div className="flex items-center gap-2">
-              <Button variant="secondary" onClick={autofillDemo}>
-                <Wand2 className="mr-2 h-4 w-4" /> Demo
-              </Button>
-              <Button onClick={copyToClipboard} disabled={!canCopy}>
-                <Copy className="mr-2 h-4 w-4" /> Copy
-              </Button>
-              <Button onClick={downloadFile} disabled={!canCopy}>
-                <Download className="mr-2 h-4 w-4" /> Download .sk
-              </Button>
-            </div>
-          </motion.header>
+          ))}
+          <button className="btn primary" onClick={addArg}>Add Arg</button>
+        </div>
 
-          <Card className="shadow-sm">
-            <CardHeader>
-              <CardTitle>Command Settings</CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <div>
-                  <Label htmlFor="name">Command name</Label>
-                  <div className="relative">
-                    <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400">/</span>
-                    <Input id="name" value={name} onChange={(e) => setName(e.target.value)} className="pl-6" placeholder="heal" />
-                  </div>
-                </div>
-                <div>
-                  <Label htmlFor="aliases">Aliases (comma-separated)</Label>
-                  <Input id="aliases" value={aliases} onChange={(e) => setAliases(e.target.value)} placeholder="h, restore" />
-                </div>
-              </div>
-
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <div>
-                  <Label htmlFor="permission">Permission</Label>
-                  <Input id="permission" value={permission} onChange={(e) => setPermission(e.target.value)} placeholder="myplugin.heal" />
-                </div>
-                <div>
-                  <Label htmlFor="bypass">Cooldown bypass (perm)</Label>
-                  <Input id="bypass" value={cooldownBypass} onChange={(e) => setCooldownBypass(e.target.value)} placeholder="myplugin.bypass.cooldown" />
-                </div>
-              </div>
-
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <div>
-                  <Label htmlFor="permissionMessage">Permission message</Label>
-                  <Input id="permissionMessage" value={permissionMessage} onChange={(e) => setPermissionMessage(e.target.value)} placeholder="§cYou lack §emyplugin.heal§c." />
-                </div>
-                <div>
-                  <Label htmlFor="execby">Executable by</Label>
-                  <Select value={executableBy} onValueChange={setExecutableBy}>
-                    <SelectTrigger id="execby"><SelectValue placeholder="both"/></SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="both">players & console</SelectItem>
-                      <SelectItem value="players">players</SelectItem>
-                      <SelectItem value="console">console</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-              </div>
-
-              <div className="grid grid-cols-1 gap-4">
-                <div>
-                  <Label htmlFor="description">Description</Label>
-                  <Textarea id="description" value={description} onChange={(e) => setDescription(e.target.value)} placeholder="Heals a target player by a specified amount." />
-                </div>
-              </div>
-
-              <div className="flex items-center justify-between rounded-xl border p-3">
-                <div className="flex items-center gap-3">
-                  <Switch id="cooldown" checked={cooldownEnabled} onCheckedChange={setCooldownEnabled} />
-                  <Label htmlFor="cooldown" className="cursor-pointer">Cooldown</Label>
-                </div>
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-3 w-full md:w-auto md:ml-6">
-                  <Input disabled={!cooldownEnabled} value={cooldownValue} onChange={(e) => setCooldownValue(e.target.value)} placeholder="10 seconds" />
-                  <Input disabled={!cooldownEnabled} value={cooldownMessage} onChange={(e) => setCooldownMessage(e.target.value)} placeholder="§7Cooldown: §e%cooldown% remaining." />
-                  <div className="flex items-center text-slate-500 text-sm md:justify-end">
-                    <Tooltip>
-                      <TooltipTrigger asChild>
-                        <Info className="h-4 w-4" />
-                      </TooltipTrigger>
-                      <TooltipContent>
-                        Example formats: "5 seconds", "1 minute", "2 minutes and 10 seconds"
-                      </TooltipContent>
-                    </Tooltip>
-                  </div>
-                </div>
-              </div>
-
-              <div className="rounded-xl border p-3">
-                <div className="flex items-center justify-between mb-3">
-                  <div className="flex items-center gap-3">
-                    <Label>Arguments</Label>
-                    <span className="text-xs text-slate-500">(controls usage line & comments)</span>
-                  </div>
-                  <Button variant="secondary" size="sm" onClick={addArg}>
-                    <Plus className="mr-2 h-4 w-4" /> Add arg
-                  </Button>
-                </div>
-
-                <div className="space-y-3">
-                  {args.map((arg, idx) => (
-                    <div key={idx} className="grid grid-cols-1 md:grid-cols-6 gap-2 items-center">
-                      <Input
-                        className="md:col-span-2"
-                        placeholder={`name (e.g. target)`}
-                        value={arg.name}
-                        onChange={e => updateArg(idx, { name: e.target.value })}
-                      />
-                      <Select value={arg.type} onValueChange={(v) => updateArg(idx, { type: v })}>
-                        <SelectTrigger className="md:col-span-2"><SelectValue placeholder="type"/></SelectTrigger>
-                        <SelectContent>
-                          {ARG_TYPES.map(t => (
-                            <SelectItem key={t.id} value={t.id}>{t.label}</SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                      <div className="flex items-center gap-3 md:col-span-2">
-                        <div className="flex items-center gap-2">
-                          <Switch checked={arg.optional} onCheckedChange={(v) => updateArg(idx, { optional: v })} id={`opt-${idx}`} />
-                          <Label htmlFor={`opt-${idx}`}>optional</Label>
-                        </div>
-                        <div className="flex items-center gap-2">
-                          <Switch checked={arg.greedy} onCheckedChange={(v) => updateArg(idx, { greedy: v })} id={`greedy-${idx}`} />
-                          <Label htmlFor={`greedy-${idx}`}>greedy</Label>
-                        </div>
-                        <Button variant="ghost" size="sm" onClick={() => removeArg(idx)}>
-                          <Trash2 className="h-4 w-4" />
-                        </Button>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-
-              <div className="rounded-xl border p-3 flex items-center justify-between gap-3">
-                <div className="flex items-center gap-3">
-                  <Switch id="autousage" checked={autoUsage} onCheckedChange={setAutoUsage} />
-                  <Label htmlFor="autousage" className="cursor-pointer">Auto-generate usage</Label>
-                </div>
-                <Input disabled={autoUsage} value={usage} onChange={(e) => setUsage(e.target.value)} placeholder="/heal <player> [amount]" />
-              </div>
-            </CardContent>
-          </Card>
-
-          <Card className="shadow-sm">
-            <CardHeader>
-              <CardTitle>Preview (Before <code>trigger:</code>)</CardTitle>
-            </CardHeader>
-            <CardContent>
-              <pre className="bg-slate-950 text-slate-100 rounded-2xl p-4 text-sm overflow-auto leading-6">
-{commandBlock || "# Your command block will appear here as you fill out the form.\n# Example:\n# command /heal <player> [<amount>]:\n#     aliases: /h, /restore\n#     description: Heals a target player by a specified amount.\n#     usage: /heal <player> [amount]\n#     permission: myplugin.heal\n#     permission message: §cYou lack §emyplugin.heal§c.\n#     executable by: players\n#     cooldown: 5 seconds\n#     cooldown message: §7Cooldown: §e%cooldown% remaining.\n#     cooldown bypass: myplugin.bypass.cooldown\n# # <player> -> player\n# # <amount> -> number (optional)"}
-              </pre>
-              <p className="text-xs text-slate-500 mt-3">This generator intentionally omits the <code>trigger:</code> block so you can paste your own logic below it.</p>
-            </CardContent>
-          </Card>
+        <div className="card" style={{gridColumn: 'span 2'}}>
+          <label className="label">Preview (before trigger:)</label>
+          <pre className="code">{commandBlock || '# Your command block will appear here'}</pre>
         </div>
       </div>
-    </TooltipProvider>
+    </div>
   );
 }
